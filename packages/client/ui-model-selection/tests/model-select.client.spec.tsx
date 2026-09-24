@@ -464,3 +464,75 @@ describe('ModelSelect keyboard walk', () => {
     expect(document.activeElement).toBe(rows[0])
   })
 })
+
+describe('ModelSelect press focus', () => {
+  const twoModels = state({
+    groups: [{
+      id: 'deepseek-official',
+      name: 'DeepSeek',
+      models: [
+        { id: 'deepseek-v4-flash', name: 'DeepSeek-V4-Flash', reasoning },
+        { id: 'deepseek-v4-pro', name: 'DeepSeek-V4-Pro', reasoning },
+      ],
+    }],
+  })
+
+  /** Open the model list, whose rows are the two fixture models; returns the submit spy. */
+  function mountModelList() {
+    const select = vi.fn().mockResolvedValue({ ok: true, value: undefined })
+    render(<ModelSelect
+      locked={false}
+      available
+      directory={createSnapshotStore<ModelDirectoryState>(twoModels)}
+      load={vi.fn()}
+      select={select}
+      t={t}
+    />)
+    fireEvent.click(screen.getByRole('button', { name: /选择模型/ }))
+    fireEvent.click(screen.getByRole('menuitem', { name: /^模型/ }))
+    return select
+  }
+
+  it('keeps the card open and the keyboard on the row when an in-card press blurs it without a destination', async () => {
+    const select = mountModelList()
+    const rows = screen.getAllByRole('menuitemradio')
+    expect(document.activeElement).toBe(rows[0])
+
+    // WebKit: the press blurs the focused row and focuses nothing (a pressed
+    // control it does not focus is named nowhere), so the blur reports a null
+    // relatedTarget while the pointer is still inside the card. The card must
+    // survive to receive the click that follows the release.
+    fireEvent.pointerDown(rows[1]!.firstElementChild!)
+    fireEvent.focusOut(rows[0]!, { relatedTarget: null })
+    expect(screen.getByRole('menu')).toBeTruthy()
+    expect(document.activeElement).toBe(rows[0])
+
+    // The release settles the press, and the row's click still selects.
+    fireEvent.pointerUp(screen.getByRole('menu'))
+    fireEvent.click(rows[1]!)
+    await waitFor(() => {
+      expect(select).toHaveBeenCalledWith({ provider: 'deepseek-official', model: 'deepseek-v4-pro' })
+    })
+  })
+
+  it('closes on a destination-less blur once no press is held, and outside a press starts outside', () => {
+    mountModelList()
+    const rows = screen.getAllByRole('menuitemradio')
+
+    // Focus that leaves the card on its own still dismisses it.
+    fireEvent.focusOut(rows[0]!, { relatedTarget: null })
+    expect(screen.queryByRole('menu')).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: /选择模型/ }))
+    fireEvent.click(screen.getByRole('menuitem', { name: /^模型/ }))
+    // The trigger is part of the card, so a press on it is an inside press.
+    const trigger = screen.getByRole('button', { name: /选择模型/ })
+    fireEvent.pointerDown(trigger)
+    fireEvent.pointerUp(trigger)
+    // A press that starts on the page carries no such license.
+    fireEvent.pointerDown(document.body)
+    fireEvent.pointerUp(document.body)
+    fireEvent.focusOut(screen.getAllByRole('menuitemradio')[0]!, { relatedTarget: null })
+    expect(screen.queryByRole('menu')).toBeNull()
+  })
+})

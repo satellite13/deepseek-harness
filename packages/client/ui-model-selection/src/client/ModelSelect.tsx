@@ -46,6 +46,18 @@ interface EffortChoice {
 const MEASURE_STYLE: CSSProperties = { visibility: 'hidden', left: 0, top: 0 }
 
 /**
+ * Whether a DOM event target belongs to the card, which mounts twice: the
+ * trigger subtree and the portaled menu card.
+ * @param target - the event target to classify.
+ * @param root - the trigger subtree's root element.
+ * @param menu - the portaled card element, while the card is open.
+ * @returns true when the target is inside either mount.
+ */
+function insideCard(target: Node, root: HTMLElement | null, menu: HTMLElement | null): boolean {
+  return root?.contains(target) === true || menu?.contains(target) === true
+}
+
+/**
  * Render the composer model seat.
  * @param props - owner share (locked) + injected face (shared directory
  * store/verbs) + the standard locale seat.
@@ -71,6 +83,9 @@ export function ModelSelect(
   const rootRef = useRef<HTMLDivElement | null>(null)
   const triggerRef = useRef<HTMLButtonElement | null>(null)
   const menuRef = useRef<HTMLDivElement | null>(null)
+  // Whether a press is currently held inside the card; `onBlur` reads it to
+  // separate a blur the card caused from focus leaving the card.
+  const pressInsideRef = useRef(false)
   const [menuPos, setMenuPos] = useState<CSSProperties | null>(null)
   const itemRefs = useRef<(HTMLButtonElement | null)[]>([])
   const id = useId()
@@ -120,13 +135,35 @@ export function ModelSelect(
   useEffect(() => {
     if (!open) return
     const closeOutside = (event: MouseEvent): void => {
-      // The portaled card is outside the trigger subtree; check both.
-      if (rootRef.current?.contains(event.target as Node) === true) return
-      if (menuRef.current?.contains(event.target as Node) === true) return
+      if (insideCard(event.target as Node, rootRef.current, menuRef.current)) return
       setOpen(false)
     }
     document.addEventListener('mousedown', closeOutside)
     return () => { document.removeEventListener('mousedown', closeOutside) }
+  }, [open])
+
+  // A press inside the card is recorded for as long as it is held, because an
+  // engine may report the blur it causes without naming where focus went (the
+  // blur rule in `onBlur` is the consumer). Pointerup, pointercancel, and the
+  // window losing focus — which can swallow the release — all end it.
+  useEffect(() => {
+    if (!open) return
+    pressInsideRef.current = false
+    const onPointerDown = (event: PointerEvent): void => {
+      pressInsideRef.current = insideCard(event.target as Node, rootRef.current, menuRef.current)
+    }
+    const endPress = (): void => { pressInsideRef.current = false }
+    document.addEventListener('pointerdown', onPointerDown, true)
+    document.addEventListener('pointerup', endPress, true)
+    document.addEventListener('pointercancel', endPress, true)
+    window.addEventListener('blur', endPress)
+    return () => {
+      pressInsideRef.current = false
+      document.removeEventListener('pointerdown', onPointerDown, true)
+      document.removeEventListener('pointerup', endPress, true)
+      document.removeEventListener('pointercancel', endPress, true)
+      window.removeEventListener('blur', endPress)
+    }
   }, [open])
 
   // A pane switch unmounts the row that had focus, which drops focus onto the
@@ -269,10 +306,20 @@ export function ModelSelect(
   }
 
   const onBlur = (event: FocusEvent<HTMLDivElement>): void => {
-    if (event.relatedTarget instanceof Node && (
-      rootRef.current?.contains(event.relatedTarget) === true
-      || menuRef.current?.contains(event.relatedTarget) === true
-    )) return
+    const destination = event.relatedTarget
+    if (destination instanceof Node && insideCard(destination, rootRef.current, menuRef.current)) return
+    // A press inside the card that reports no destination has not left the
+    // card: WebKit blurs a programmatically focused row on mouse down and names
+    // nothing as the receiving element when it does not focus the pressed
+    // control, so `relatedTarget` is null while the card is still the surface in
+    // use. Closing on that blur unmounts the card before the click that follows
+    // the release, which loses the selection. The card instead keeps the
+    // keyboard by handing it back to the control the press took it from.
+    if (destination === null && pressInsideRef.current) {
+      const lost = event.target
+      if (lost instanceof HTMLButtonElement) lost.focus()
+      return
+    }
     close()
   }
 
