@@ -186,6 +186,20 @@ describe.skipIf(MODE === 'record').each([
     }
     // Later selection counts also include any request from this cancelled press.
     expect(selections).toBe(0)
+
+    // A press inside the card that lands on no control is not a departure from
+    // it: every engine blurs the focused row and names nothing as the
+    // destination (WebKit drops the focus to the page body), which used to
+    // unmount the card before the release and strand the keyboard outside it.
+    await page.getByText('Acme Gateway', { exact: true }).hover()
+    await page.mouse.down()
+    try {
+      await expect.poll(() => menu.count()).toBe(1)
+      await expect.poll(() => current.evaluate(element => element === document.activeElement)).toBe(true)
+    } finally {
+      await page.mouse.up()
+    }
+    expect(selections).toBe(0)
     await page.keyboard.press('ArrowDown')
     await expect.poll(() => target.evaluate(element => element === document.activeElement)).toBe(true)
     await page.keyboard.press('Escape')
